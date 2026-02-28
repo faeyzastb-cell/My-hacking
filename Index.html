@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CCTV WA SYNC PRO</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <style>
+        body { background: #000; color: #0f0; font-family: monospace; text-align: center; margin: 0; padding: 10px; }
+        .box { border: 1px solid #333; padding: 15px; margin: 10px auto; max-width: 400px; background: #111; border-radius: 12px; }
+        video { width: 100%; height: 200px; background: #000; border: 1px solid #0f0; border-radius: 8px; margin-bottom: 10px; }
+        input { width: 85%; padding: 15px; margin: 10px 0; background: #222; color: #0f0; border: 1px solid #0f0; border-radius: 8px; font-size: 16px; text-align: center; }
+        button { width: 100%; padding: 15px; margin: 5px 0; cursor: pointer; font-weight: bold; border-radius: 8px; border: none; font-size: 14px; }
+        .btn-wa { background: #25D366; color: #fff; }
+        .btn-pip { background: #6c5ce7; color: #fff; }
+        .btn-snap { background: #ff4757; color: #fff; }
+        #loc-info { font-size: 11px; color: #00d2ff; margin: 10px 0; }
+        #ui, #login { display: none; }
+        #loading { padding: 50px; color: #ff0; }
+    </style>
+</head>
+<body onload="autoConnect()">
+
+    <div id="loading">⚡ MENGHUBUNGKAN...</div>
+
+    <div id="login" class="box">
+        <h2 style="color: #25D366;">[ WA SYNC ]</h2>
+        <p>Masukkan Nomor WA (Cukup Sekali):</p>
+        <input type="number" id="wa-num" placeholder="Contoh: 08123456789">
+        <button class="btn-wa" onclick="manualInit()">HUBUNGKAN SEKARANG</button>
+    </div>
+
+    <div id="ui">
+        <video id="v" autoplay playsinline muted></video>
+        
+        <div class="box">
+            <button class="btn-pip" onclick="startPiP()">🚀 MODE HOME (PiP)</button>
+            <button style="background:#00b894; color:#fff;" onclick="cmd('loc')">📍 LACAK LOKASI GPS</button>
+            <hr border="1" color="#222" style="margin: 15px 0;">
+            <button class="btn-snap" onclick="cmd('snap')">📸 JEPRET FOTO</button>
+            <button style="background:#eccc68;" onclick="cmd('torch')">🔦 SENTER ON/OFF</button>
+            <button style="background:#444; color:#fff; font-size: 10px;" onclick="resetConn()">GANTI NOMOR / LOGOUT</button>
+        </div>
+
+        <div class="box">
+            <p>HASIL MONITORING:</p>
+            <img id="out" style="width:100%; border-radius: 8px;">
+            <div id="loc-info">Lokasi: Belum terdeteksi</div>
+            <a id="map-link" href="#" target="_blank" style="color:#25D366; display:none; text-decoration: underline;">Tampilkan di Google Maps</a>
+        </div>
+    </div>
+
+    <canvas id="c" style="display:none;"></canvas>
+
+    <script>
+        // WAJIB: Ganti URL Firebase Database lo di bawah ini!
+        const cfg = { databaseURL: "https://URL_FIREBASE_LO.firebaseio.com" }; 
+        firebase.initializeApp(cfg);
+        const db = firebase.database();
+        let path, track, v = document.getElementById('v'), c = document.getElementById('c');
+
+        function autoConnect() {
+            let savedNum = localStorage.getItem('wa_cctv');
+            if(savedNum) {
+                document.getElementById('loading').style.display = 'none';
+                startSystem(savedNum);
+            } else {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('login').style.display = 'block';
+            }
+        }
+
+        function manualInit() {
+            let n = document.getElementById('wa-num').value;
+            if(n.length < 10) return alert("Nomor WA nggak valid!");
+            localStorage.setItem('wa_cctv', n);
+            startSystem(n);
+        }
+
+        function startSystem(n) {
+            path = 'cctv_wa/' + n;
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('ui').style.display = 'block';
+
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: true })
+                .then(s => {
+                    v.srcObject = s;
+                    track = s.getVideoTracks()[0];
+                    if ('wakeLock' in navigator) { navigator.wakeLock.request('screen'); }
+                }).catch(e => alert("Izin kamera ditolak!"));
+
+            db.ref(path + '/cmd').on('value', s => {
+                let v_cmd = s.val();
+                if(!v_cmd) return;
+                if(v_cmd === 'snap') {
+                    c.width = v.videoWidth; c.height = v.videoHeight;
+                    c.getContext('2d').drawImage(v, 0, 0);
+                    db.ref(path + '/img').set(c.toDataURL('image/jpeg', 0.5));
+                } else if(v_cmd === 'loc') {
+                    navigator.geolocation.getCurrentPosition(p => {
+                        db.ref(path + '/gps').set({ lat: p.coords.latitude, lng: p.coords.longitude });
+                    });
+                } else if(v_cmd === 'torch') {
+                    let cur = track.getSettings().torch || false;
+                    track.applyConstraints({ advanced: [{ torch: !cur }] });
+                }
+                db.ref(path + '/cmd').set(null);
+            });
+
+            db.ref(path + '/img').on('value', s => { if(s.val()) document.getElementById('out').src = s.val(); });
+            db.ref(path + '/gps').on('value', s => {
+                const data = s.val();
+                if(data) {
+                    document.getElementById('loc-info').innerText = `KOORDINAT: ${data.lat}, ${data.lng}`;
+                    const link = `https://www.google.com/maps?q=${data.lat},${data.lng}`;
+                    const a = document.getElementById('map-link');
+                    a.href = link; a.style.display = 'block';
+                }
+            });
+        }
+
+        async function startPiP() { 
+            try { await v.requestPictureInPicture(); } catch (e) { alert("Browser nggak support PiP!"); }
+        }
+        function cmd(t) { db.ref(path + '/cmd').set(t); }
+        function resetConn() { localStorage.removeItem('wa_cctv'); location.reload(); }
+    </script>
+</body>
+  </html>
+  
